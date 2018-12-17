@@ -3,8 +3,8 @@
 Code to run R2D2 fully functional from a ATMega328 Arduino Nano with wireless remote.
 This code is meant to be for Astromech builders of R2D2 who are looking run a custom approach vs. commercial approach.
 
-##This project assumes you are using ALL of the following hardware:
-- R2D2
+## This project assumes you are using ALL of the following hardware:
+- Full size R2D2 (visit astromech.net)
 - 2 x ATMega328 Arduino Nano
 - 1 x DFPlayerMini
 - 1 x NRF24 Wireless Transceiver (set comes with two for transceiver and receiver)
