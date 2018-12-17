@@ -5,7 +5,7 @@ This code is meant to be for Astromech builders of R2D2 who are looking run a cu
 
 ## This project assumes you are using ALL of the following hardware:
 - Full size R2D2 (visit astromech.net)
-- 2 x ATMega328 Arduino Nano
+- 2 x ATMega328 Arduino Nano (one for R2, another for wireless remote)
 - 1 x DFPlayerMini
 - 1 x NRF24 Wireless Transceiver (set comes with two for transceiver and receiver)
 - 1 x Buck Boost Converter
