@@ -1,7 +1,7 @@
 # R2D2 - Atmega328
 
 Code to run R2D2 fully functional from a ATMega328 Arduino Nano with wireless remote.
-This code is meant to be for Astromech builders of R2D2 who are looking run a custom approach vs. commercial approach.
+This code is meant to be for Astromech builders of R2D2 who are looking for a custom approach vs. commercial approach.
 
 ## This project assumes you are using ALL of the following hardware:
 - Full size R2D2 (visit astromech.net)
