@@ -1,338 +1,553 @@
-#include <SPI.h>
-#include <Wire.h>
-#include <SabertoothSimplified.h>
-#include <Adafruit_NeoPixel.h>
-#include <SoftwareSerial.h>
-#include <Adafruit_PWMServoDriver.h>
-#include <RH_NRF24.h>
-#include <L298N.h>
-#include <DFRobotDFPlayerMini.h>
+#include "Globals.h";
+#include "Servos.h";
+#include "Radio.h";
+#include "AI.h";
+#include "Relay.h";
+#include "Audio.h";
+#include "LEDs.h";
+#include "Drive.h";
+#include "Body.h";
 
-int CurrentServo = 0;
-int CurrentServoPulse = 150;
+/* WiFi */
+HardwareSerial &WiFi = Serial1;
 
-/* R2 Modes */
-byte Mode = 2;
-byte ModeSwitchChecks = 0;
+/* Relays */
 
-/* DOME Servos */
-#define SERVOMIN  150 // this is the 'minimum' pulse length count (out of 4096)
-#define SERVOMAX  600 // this is the 'maximum' pulse length count (out of 4096)
-Adafruit_PWMServoDriver DomeServos = Adafruit_PWMServoDriver();
+/* Servos */
 
-/* Wireless */
-RH_NRF24 Wireless;
-unsigned long WirelessWait = 0;
+/* Radio communication */
+RadioPackage RadioData; // Create a variable with the above structure
 
-/* DOME LEDs */
-byte DomeLEDBrightness = 100;
-Adafruit_NeoPixel DomeLEDS = Adafruit_NeoPixel(32, 2, NEO_GRB + NEO_KHZ800);
-
-/* Basic LED Colors */
-const uint32_t LEDWhite = Adafruit_NeoPixel::Color(195, 255, 255);
-const uint32_t LEDBlack = Adafruit_NeoPixel::Color(0, 0, 0);
-
-/* Front DOME LED Colors */
-const uint32_t LEDBlue = Adafruit_NeoPixel::Color(0, 0, 255);
-const uint32_t LEDRed = Adafruit_NeoPixel::Color(255, 0, 0);
-
-/* Back DOME LED Colors */
-const uint32_t LEDGreen = Adafruit_NeoPixel::Color(45, 235, 235);
-const uint32_t LEDGold = Adafruit_NeoPixel::Color(245, 190, 35);
-
-
-unsigned long LEDDiffuseWait = millis();
-unsigned long LEDLogicWait = millis();
-unsigned long LEDHoloWait = millis();
-
-int LEDDiffusePause = random(1000, 10000);
-int LEDLogicPause = random(1000, 4000);
-int LEDHoloPause = random(100, 500);
-
-byte FrontLEDState = 0;
-byte BackLEDState = 0;
-
-/* MP3 variables */
-SoftwareSerial AudioVirtualSerial(9, 7);
-DFRobotDFPlayerMini AudioPlayer;
-
-/* DOME Drive Motor */
-L298N DomeMotor(5, 4, 3);
-
-/* Feet motors */
-SabertoothSimplified FeetMotors; // We'll name the Sabertooth object FeetMotors.
-
-/* Audio folder mapping */
-byte Beeps[2] = {1, 34};
-byte Frightened[2] = {35, 38};
-byte Charging[2] = {39, 40};
-byte No[2] = {41, 42};
-byte Yes[2] = {43, 43};
-byte Mad[2] = {44, 46};
-byte Happy[2] = {47, 50};
-byte Sad[2] = {51, 56};
-byte Music[2] = {57, 65};
-
-const unsigned long MusicLengths[10] = {
-  420000,
-  385800,
-  192000,
-  256200,
-  128400,
-  256800,
-  300600,
-  121200,
-  193200
-};
-unsigned long PlayingAudioWait = 0;
-int CurrentlyPlayingMusic = -1;
+/* MP3 Player */
 
 void setup()
 {
-  /* Virtual Serial Must Begin before actual nano Serial */
-  AudioVirtualSerial.begin(9600);
-
-  /* We next connect our audio player object to the audio virtual serial. */
-  AudioPlayer.begin(AudioVirtualSerial);
-  AudioPlayer.volume(30);  //Set volume value. From 0 to 30
-  //PlayRandomMP3(Music);
- 
-  /* Dome LEDS Setup */
-  DomeLEDS.begin();
-  DomeLEDS.setBrightness(DomeLEDBrightness);
-  DomeLEDS.show();
+  /* Dome & Body Servos Setup */
+  ServosSetup();
   
+  /* Setup MP3 Player (MUST BE RAN BEFORE THE MAIN Serial.begin() BELOW!)*/
+  AudioSetup();
 
-  /* Dome Servos Setup */
-  DomeServos.begin();
-  DomeServos.setPWMFreq(60);  // Analog servos run at ~60 Hz updates
+  /* Main Serial Setup (DO NOT REMOVE, RADIO COMMUNICATION NEEDS THIS STARTED) */
+  Serial.begin(9600);
 
-  /* Dome Motor Setup */
-  DomeMotor.setSpeed(0); // an integer between 0 and 255
+  /* Setup AI (Speech recoignition and text to speech) */
+  AISetup();
+  
+  /* Radio communication Setup */
+  RadioSetup();
+  
+  /* Relays Setup */
+  // RelaySetup();
 
-  /* Feet Motors Setup */
-  SabertoothTXPinSerial.begin(9600); // This is the baud rate you chose with the DIP switches.
-  //FeetMotors.autobaud();
-  FeetMotors.drive(0);
-  FeetMotors.turn(0); 
+  /* Dome and Foot Drive Setup */
+  DriveSetup();
 
-  /* Wireless Setup */
-  Wireless.init();
-  Wireless.setChannel(1);
-  Wireless.setRF(RH_NRF24::DataRate2Mbps, RH_NRF24::TransmitPower0dBm);
+  /*Audio.h Plays random beeps array */
+  PlayRandomBeep(Beeps, false);
+
+  /* Body and Dome LED setup */
+  LEDSetup();  
 }
+
+//String readString;
 
 void loop()
-{
-  //serial_commands_.ReadSerial();
-  DomeLEDsUpdate();
-  WirelessPing();
+{   
+  // ToggleArmLights((leftFrontLargeDoorStatus == 1 || leftFrontLargeDoorStatus == 1) ? 1 : 0);
+  // TogglePanelLights((dataFrontDoorStatus == 1 || chargebayFrontDoorStatus == 1) ? 1 : 0);
+  // ToggleGroundLights(groundLightsStatus);
+
+  if (millis() > (AudioWait + random(9000, 21000))) {
+    if (random(0, 2) == 0) {
+      PlayRandomBeep(Beeps, false);
+    } else {
+      PlayRandomBeep(Happy, false);
+    }
+    AudioWait = millis();
+  }
+  
+  // Radio Transiver Pulse
+  RadioPing();
+  
+  // Voice Interface Pulses
+  // AIPing();
+
+  //  if (millis() > (dataFrontDoorWait + 5000)) {
+  //    digitalWrite(Relay5VA, HIGH);
+  //    digitalWrite(Relay5VB, HIGH);
+  //    digitalWrite(Relay12VA, HIGH);
+  //    digitalWrite(Relay12VB, HIGH);
+  //    
+  //    dataFrontDoorWait = millis();
+  //  } else {
+  //    digitalWrite(Relay5VA, LOW);
+  //    digitalWrite(Relay5VB, LOW);
+  //    digitalWrite(Relay12VA, LOW);
+  //    digitalWrite(Relay12VB, LOW);
+  //  }   
 }
 
-void WirelessPing() {
-  while (millis() > WirelessWait + 100) {
-    uint8_t buf[RH_NRF24_MAX_MESSAGE_LEN];
-    // Should be a reply message for us now 
-    if (Wireless.recv(buf, sizeof(&buf)))
-    {
-      //Serial.println("Speed: ");
-      //Serial.print(buf[1]); 
-      if (buf[2] == 1) {
-        // Click to play random beep
-        PlayRandomBeep(Beeps, false);
-  
-        if (ModeSwitchChecks <= 3) {
-          // If found to be holding joystick click for three checks
-          ModeSwitchChecks++;
-        } else {
-          Mode++;
-          if (Mode > 3) {
-            Mode = 0;
-          }  
-          ModeSwitchChecks = 0;
+void RadioPing() {
+  while (millis() > RadioWait + 50) {
+    if (Radio.available()) {
+      Radio.read(&RadioData, sizeof(RadioPackage));
+      // MP3 and AI Volumes
+      // time and value based volume debouncer
+
+//      if (groundLightsStatus == 1) {
+//        // scroll throught colors
+//        byte red = groundLightsRGB[0];
+//        byte green = groundLightsRGB[1];
+//        byte blue = groundLightsRGB[2];
+//        byte saturation = 255;
+//        bool scrollDownRGB = (RadioData.angleY > (255 / 2)) ? true : false;
+//        byte scrollSpeed = 17;
+//
+//        if (blue == 0 && red == 0 && green == 0) {
+//          red = saturation;
+//        } 
+//        
+//        // SCROLL DOWN COLORS
+//        if (RadioData.angleY > 210) {         
+//          // Add blue to red
+//          if (blue != saturation && red == saturation && green == 0) {
+//            blue = blue + scrollSpeed;
+//            if (blue > saturation) { blue = saturation; }
+//          }
+//          // Remove red from blue
+//          else if (blue == saturation && red != 0 && green == 0) {
+//            red = red - scrollSpeed;
+//            if (red < 0) { red = 0; }
+//          }
+//
+//          // Add green to blue
+//          else if (green != saturation && blue == saturation && red == 0) {
+//            green = green + scrollSpeed;
+//            if (green > saturation) { green = saturation; }
+//          }
+//
+//          // Remove blue from green
+//          else if (green == saturation && blue != 0 && red == 0) {
+//            blue = blue - scrollSpeed;
+//            if (blue < 0) { blue = 0; }
+//          }
+//
+//          // Add red to green
+//          else if (red != saturation && green == saturation && blue == 0) {
+//            red = red + scrollSpeed;
+//            if (red > saturation) { red = saturation; }
+//          }
+//
+//          // Remove green from red
+//          else if (red == saturation && green != 0 && blue == 0) {
+//            green = green - scrollSpeed;
+//            if (green < 0) { green = 0; }
+//          }
+//          
+//        } 
+//        // SCROLL UP COLORS
+//        else if (RadioData.angleY < 30) {             
+//          // Add green to red
+//          if (blue == 0 && green != saturation && red == saturation) {
+//            green = green + scrollSpeed;
+//            if (green > saturation) { green = saturation; }
+//          }
+//          
+//          // Remove red from green
+//          else if (blue == 0 && red != 0 && green == saturation) {
+//            red = red - scrollSpeed;
+//            if (red < 0) { red = 0; }
+//          }
+//
+//          // Add blue to green
+//          else if (green == saturation && blue != saturation && red == 0) {
+//            blue = blue + scrollSpeed;
+//            if (blue > saturation) { blue = saturation; }
+//          }
+//
+//          // Remove green from blue
+//          else if (green != 0 && blue == saturation && red == 0) {
+//            green = green - scrollSpeed;
+//            if (green < 0) { green = saturation; }
+//          }
+//
+//          // Add red to blue
+//          else if (red != saturation && green == 0 && blue == saturation) {
+//            red = red + scrollSpeed;
+//            if (red > saturation) { red = saturation; }
+//          }
+//
+//          // Remove blue from red
+//          else if (red == saturation && green == 0 && blue > 0) {
+//            blue = blue - scrollSpeed;
+//            if (blue < 0) { blue = 0; }
+//          }
+//        }
+//        
+//        if (red > saturation) { red = saturation; }
+//        if (green > saturation) { green = saturation; }
+//        if (blue > saturation) { blue = saturation; }
+//
+//        groundLightsRGB[0] = red;
+//        groundLightsRGB[1] = green;
+//        groundLightsRGB[2] = blue;
+// 
+//        for(int i=0;i<120;i++) {
+//          BodyLEDS.setPixelColor(i, BodyLEDS.Color(groundLightsRGB[0], groundLightsRGB[1], groundLightsRGB[2]));
+//        }
+//
+//        if (RadioData.angleX >= 150) {
+//          BodyLEDS.setBrightness(150);
+//        }else if (RadioData.angleX <= 10) {
+//          BodyLEDS.setBrightness(10);
+//        } else {
+//          BodyLEDS.setBrightness(RadioData.angleX);      
+//        }
+//        
+//        BodyLEDS.show();
+//      }
+
+
+      if (millis() > VolumeWait + 1000) {
+        if ((CurrentAudioVolume) != map(RadioData.pot1, 0, 255, 0, 30)) {
+          CurrentAudioVolume = map(RadioData.pot1, 0, 255, 0, 30);
+          AudioPlayer.volume(CurrentAudioVolume);
+          // AI.println("VOLUME" + (char)CurrentAudioVolume);      
         }
-      } else {
-        ModeSwitchChecks = 0;
+        VolumeWait = millis();
+      }
+
+      // Toggle Switch Modes
+      if (millis() > (tSwitchWait + 512)) {
+        if (
+          RadioData.tSwitch1 != tSwitch1State 
+          || RadioData.tSwitch2 != tSwitch2State
+        ) {
+          // if (RadioData.tSwitch1 == 0 && RadioData.tSwitch2 == 0) { AI.println(F("SAY Voice Mode!")); }
+          // if (RadioData.tSwitch1 == 0 && RadioData.tSwitch2 == 1) { AI.println(F("SAY Body Mode!")); }
+          // if (RadioData.tSwitch1 == 1 && RadioData.tSwitch2 == 0) { AI.println(F("SAY Dome Mode!")); } 
+          // if (RadioData.tSwitch1 == 1 && RadioData.tSwitch2 == 1) { AI.println(F("SAY Standard Mode!")); }
+        }
+
+        tSwitch1State = RadioData.tSwitch1;
+        tSwitch2State = RadioData.tSwitch2;
+        
+        tSwitchWait = millis();
+      }
+
+      //Standard Mode
+      if (RadioData.tSwitch1 == 1 && RadioData.tSwitch2 == 1) {
+        // Driving Feet Motors
+        DriveFeetMotors(
+          RadioData.j1PotY,
+          RadioData.j1PotX,
+          RadioData.pot2
+        );
+        
+        // Driving Dome Motors
+        TurnDomeMotor(RadioData.j2PotX); 
+
+        // Button1 states
+        if (millis() > AudioWait + 256) {
+          if (button1State != RadioData.button1) {
+            // we have a changed state
+            // button released
+            if (button1State == 0 && RadioData.button1 == 1) {
+              button1State = 1;
+              PlayRandomBeep(GeneralMusic, false);
+            } else if (button1State == 1 && RadioData.button1 == 0){
+              button1State = 0;
+            }
+          }
+    
+          // Button2 states
+          if (button2State != RadioData.button2) {
+            // we have a changed state
+            // button released
+            if (button2State == 0 && RadioData.button2 == 1) {
+              button2State = 1;
+              PlayRandomBeep(Beeps, false);
+            } else if (button2State == 1 && RadioData.button2 == 0){
+              button2State = 0;
+            }
+          }      
+    
+          // Button3 states
+          if (button3State != RadioData.button3) {
+            // we have a changed state
+            // button released
+            if (button3State == 0 && RadioData.button3 == 1) {
+              button3State = 1;
+              PlayRandomMP3(FilmMusic);
+            } else if (button3State == 1 && RadioData.button3 == 0){
+              button3State = 0;
+            }
+          }
+    
+          // Button4 states
+          if (button4State != RadioData.button4) {
+            // we have a changed state
+            // button released
+            if (button4State == 0 && RadioData.button4 == 1) {
+              button4State = 1;
+              PlayRandomMP3(HalloweenMusic);
+            } else if (button4State == 1 && RadioData.button4 == 0){
+              button4State = 0;
+            }
+          }
+  
+          AudioWait = millis();
+        }      
+      }
+
+      // Voice mode
+      if (RadioData.tSwitch1 == 0 && RadioData.tSwitch2 == 0) {
+        
       }
       
-      // Driving Feet Motors
-      if (Mode == 0) {
-        DriveFeetMotors(buf[1], buf[0]);      
+      // Body Mode
+      if (RadioData.tSwitch1 == 0 && RadioData.tSwitch2 == 1) {
+        // Open/Close Top Utility arm
+        if (RadioData.j1Button == 0 && millis() > (UtilityArmTopWait + 250)) {
+          if (UtilityArmStatus[0] == 0) {
+            // Open
+            ToggleBodyDoor(1, 170, 338);
+            UtilityArmStatus[0] = 1;              
+          } else if (UtilityArmStatus[0] == 1) {
+            // Close            
+            ToggleBodyDoor(1, 338, 170); 
+            UtilityArmStatus[0] = 0;                
+          }
+          UtilityArmTopWait = millis();           
+        }
+        
+        // Open/Close Bottom Utility arm
+        if (RadioData.j2Button == 0 && millis() > (UtilityArmBottomWait + 250)) {
+          if (UtilityArmStatus[1] == 0) {
+            // Open
+            ToggleBodyDoor(0, 250, 412);
+            UtilityArmStatus[1] = 1; 
+          } else if (UtilityArmStatus[1] == 1) {
+            // Close
+            ToggleBodyDoor(0, 412, 250); 
+            UtilityArmStatus[1] = 0;
+          }
+          UtilityArmBottomWait = millis();
+        }
+        
+        // Open Large Body Door One
+        if (RadioData.j1PotY > 230) {
+          if (leftFrontLargeDoorStatus == 0 && leftArmRotateStatus == 0 && leftArmActuateStatus == 0 && (millis() > (largeOneFrontDoorWait + 500))) {
+            largeOneFrontDoorWait = millis();
+            ToggleBodyDoor(5, 200, 130);
+            leftFrontLargeDoorStatus = 1;
+          }
+          
+          if (leftFrontLargeDoorStatus == 1 && leftArmRotateStatus == 0 && leftArmActuateStatus == 0 && (millis() > (largeOneFrontDoorWait + 500))) {
+            largeOneFrontDoorWait = millis();
+            ToggleBodyDoor(6, 250, 450);
+            leftArmRotateStatus = 1;
+          }
+          
+          if (leftFrontLargeDoorStatus == 1 && leftArmRotateStatus == 1 && leftArmActuateStatus == 0 && (millis() > (largeOneFrontDoorWait + 500))) {
+            largeOneFrontDoorWait = millis();
+            ToggleBodyDoor(7, 340, 220);
+            leftArmActuateStatus = 1;             
+          }
+        }
+
+        // Close Large Body Door One
+        if (RadioData.j1PotY < 20) {   
+          if (leftFrontLargeDoorStatus == 1 && leftArmRotateStatus == 1 && leftArmActuateStatus == 1 && (millis() > (largeOneFrontDoorWait + 500))) {
+            largeOneFrontDoorWait = millis();
+            ToggleBodyDoor(7, 220, 340);
+            leftArmActuateStatus = 0;
+          }
+          
+          if (leftFrontLargeDoorStatus == 1 && leftArmRotateStatus == 1 && leftArmActuateStatus == 0 && (millis() > (largeOneFrontDoorWait + 500))) {
+            largeOneFrontDoorWait = millis();
+            ToggleBodyDoor(6, 450, 250);
+            leftArmRotateStatus = 0;            
+          }
+             
+          if (leftFrontLargeDoorStatus == 1 && leftArmRotateStatus == 0 && leftArmActuateStatus == 0 && (millis() > (largeOneFrontDoorWait + 500))) {
+            largeOneFrontDoorWait = millis();
+            ToggleBodyDoor(5, 130, 200);
+            leftFrontLargeDoorStatus = 0;
+          }
+        }
+
+        // Open Large Body Door Two
+        if (RadioData.j2PotY > 230) {
+          if (rightFrontLargeDoorStatus == 0 && rightArmRotateStatus == 0 && rightArmActuateStatus == 0 && (millis() > (largeTwoFrontDoorWait + 500))) {
+            largeTwoFrontDoorWait = millis();
+            ToggleBodyDoor(8, 150, 350);
+            rightFrontLargeDoorStatus = 1;
+          }
+
+          if (rightFrontLargeDoorStatus == 1 && rightArmRotateStatus == 0 && rightArmActuateStatus == 0 && (millis() > (largeTwoFrontDoorWait + 500))) {
+            largeTwoFrontDoorWait = millis();   
+            ToggleBodyDoor(9, 410, 170);
+            rightArmRotateStatus = 1;
+          } 
+
+          if (rightFrontLargeDoorStatus == 1 && rightArmRotateStatus == 1 && rightArmActuateStatus == 0 && (millis() > (largeTwoFrontDoorWait + 500))) {
+            largeTwoFrontDoorWait = millis();          
+            ToggleBodyDoor(10, 200, 490);
+            rightArmActuateStatus = 1;        
+          } 
+        }
+
+        // Close Large Body Door Two
+        if (RadioData.j2PotY < 20) { 
+          if (rightFrontLargeDoorStatus == 1 && rightArmRotateStatus == 1 && rightArmActuateStatus == 1 && (millis() > (largeTwoFrontDoorWait + 500))) {
+            largeTwoFrontDoorWait = millis();             
+            ToggleBodyDoor(10, 490, 200);
+            rightArmActuateStatus = 0;            
+          }       
+
+          if (rightFrontLargeDoorStatus == 1 && rightArmRotateStatus == 1 && rightArmActuateStatus == 0 && (millis() > (largeTwoFrontDoorWait + 500))) {
+            largeTwoFrontDoorWait = millis();             
+            ToggleBodyDoor(9, 170, 410);
+            rightArmRotateStatus = 0;               
+          } 
+                         
+          if (rightFrontLargeDoorStatus == 1 && rightArmRotateStatus == 0 && rightArmActuateStatus == 0 && (millis() > (largeTwoFrontDoorWait + 500))) {
+            largeTwoFrontDoorWait = millis();             
+            ToggleBodyDoor(8, 350, 150);
+            rightFrontLargeDoorStatus = 0; 
+          }        
+        }          
+
+        // Open / Close Data panel
+        if (RadioData.button1 == 0 && millis() > (dataPanelFrontDoorWait + 250)) {
+          if (dataFrontDoorStatus == 0) {
+            ToggleBodyDoor(2, 420, 570);
+            dataFrontDoorStatus = 1;
+          } else {
+            ToggleBodyDoor(2, 570, 420);
+            dataFrontDoorStatus = 0;
+          }
+          
+          dataPanelFrontDoorWait = millis();
+        }
+        
+        // Open / Close Charge Bay
+        if (RadioData.button2 == 0 && millis() > (chargebayFrontDoorWait + 250)) {
+          if (chargebayFrontDoorStatus == 0) {
+            ToggleBodyDoor(3, 370, 250);
+            chargebayFrontDoorStatus = 1;
+          } else {
+            ToggleBodyDoor(3, 250, 370);
+            chargebayFrontDoorStatus = 0;
+          }
+          
+          chargebayFrontDoorWait = millis();
+        }
+
+        // Open / Close Small Front Door
+        if (RadioData.button3 == 0 && millis() > (smallTallFrontDoorWait + 250)) {
+          if (verticalSwitchFrontDoorStatus == 0) {
+            ToggleBodyDoor(4, 100, 320);
+            verticalSwitchFrontDoorStatus = 1;
+          } else {
+            ToggleBodyDoor(4, 320, 100);
+            verticalSwitchFrontDoorStatus = 0;
+          }
+          
+          smallTallFrontDoorWait = millis();
+        }
+
+        // Open / Close Back Doors
+        if (RadioData.button4 == 0) {
+          if (backLargeDoorsStatus == 0 && (millis() > (largeBackDoorsWait + 500))) {
+            largeBackDoorsWait = millis(); 
+            ToggleBodyDoor(13, 400, 475);
+            ToggleBodyDoor(11, 475, 400);
+            backLargeDoorsStatus = 1;
+          } else if (backLargeDoorsStatus == 1 && (millis() > (largeBackDoorsWait + 500))) {
+            largeBackDoorsWait = millis();
+            ToggleBodyDoor(13, 475, 400);
+            ToggleBodyDoor(11, 400, 475);
+            backLargeDoorsStatus = 0;
+          }
+        }                
+        
+        // Toggle on / configure / off ground lights
+        if (RadioData.button4 == 0 && RadioData.button1 == 0 && millis() > (groundLightsWait + 150)) {
+          if (groundLightsStatus == 0) {
+            groundLightsStatus = 1;
+          } else if (groundLightsStatus == 1) {
+            groundLightsStatus = 2;
+          } else {
+            groundLightsStatus = 0;
+          }
+          groundLightsWait = millis();
+        }
       }
 
-      // Turning Dome Motor
-      if (Mode == 1) {
-        TurnDomeMotor(buf[0]);
-      }
-
-      // Turning Dome Servos
-      if (Mode == 2) {
-        DriveDomeServos(buf[0], buf[1]);
-      }
-
-      //Serial.println(ModeSwitchChecks);   
+      // Dome Mode
+      if (RadioData.tSwitch1 == 1 && RadioData.tSwitch2 == 0) {
+        
+      }   
     } else {
-      //DriveFeetMotors(0, 0);
-      //TurnDomeMotor(0);  
+      // DO NOT REMOVE THIS!
+      DomeMotor.setSpeed(0);
+      FeetMotors.drive(0);
+      FeetMotors.turn(0);
     }
 
-    WirelessWait = millis();
+    RadioWait = millis();
+
+    if (millis() > (ServoSleepWait + 1000)) {
+      BodyServos.sleep();
+    }
   }
 }
 
-void DriveFeetMotors(int speed, int turn) {
-  int maxSpeed = 127;
-  speed = map(speed, 127, 0, maxSpeed, -maxSpeed);
-  turn = map(turn, 127, 0, -maxSpeed, maxSpeed);
-  AudioPlayer.volume(map(abs(speed), 0, 127, 0, 15));
-  PlayRandomMP3(Music);
+// Motor and Servo methods
 
-  if (speed <= 10 && speed >= -10) {
-    speed = 0;
-  }
-
-  if (turn <= 10 && turn >= -10) { 
-    turn = 0; 
-  }
-
-  FeetMotors.drive(speed); // 127 === forwards (full power) | -127 === backwards (full power)
-  FeetMotors.turn(turn);   // -127 === turns left | 127 === turns right
-}
-
-void TurnDomeMotor(int x) {
-  // due to poor joystick percision due to battery, we have limit this method to values over 20.
-  int maxSpeed = 255;
-  int Input = map(x, 127, 0, 127, -127);
-  if (Input <= 10 && Input >= -10) {
-    Input = 0;
-    DomeMotor.stop();
-    return;
-  }
-
-  int Direction = abs(Input); 
-  int Speed = map(Direction, 0, 127, 0, maxSpeed);
-
-  if (Speed >= 10) {
-    DomeMotor.setSpeed(Speed); // 127 === forwards (full power) | -127 === backwards (full power)
-  }
-
-  if (Input >= 10) {
-    DomeMotor.forward();
+void ToggleArmLights(byte onOff) {
+  if (onOff == 0) {
+    //for(int i=120;i<BodyLEDSCount;i++) {
+    //  BodyLEDS.setPixelColor(i, BodyLEDS.Color(0,0,0));
+    //  BodyLEDS.show();
+    //}
   }
   
-  if (Input <= -10){
-    DomeMotor.backward();
+  if (onOff == 1) {
+    //for(int i=120;i<BodyLEDSCount;i++) {
+    //  BodyLEDS.setPixelColor(i, BodyLEDS.Color(52,0,223));
+    //  BodyLEDS.show();
+    //}
   }
 }
 
-byte DomeServoCount = 5;
-void DriveDomeServos(int x, int y) {
-  // Drive each servo one at a time
-  for (uint16_t pulselen = SERVOMIN; pulselen < SERVOMAX; pulselen++) {
-    DomeServos.setPWM(DomeServoCount, 0, pulselen);
-    delay(20);
-  }
-  delay(500);
-
-  for (uint16_t pulselen = SERVOMAX; pulselen > SERVOMIN; pulselen--) {
-    DomeServos.setPWM(DomeServoCount, 0, pulselen);
-    delay(20);
-  }
-  delay(500);
-
-  DomeServoCount++;
-  if (DomeServoCount == 5) DomeServoCount = 16;
-}
-
-void PlayRandomBeep(byte audioRange[2], bool asAdvertisment) {
-  if (asAdvertisment == true) {
-    AudioPlayer.advertise(random(audioRange[0], audioRange[1]));
-  } else {
-    AudioPlayer.play(random(audioRange[0], audioRange[1]));  
-  }
-}
-
-void PlayRandomMP3(byte audioRange[2]) {
-  int randomId = random(audioRange[0], audioRange[1]);
-
-  if (CurrentlyPlayingMusic == -1) {
-    AudioPlayer.play(randomId);
-    CurrentlyPlayingMusic = randomId - 57;
-    PlayingAudioWait = millis();
-    return;
-  }
-
-  while (millis() > PlayingAudioWait + MusicLengths[CurrentlyPlayingMusic]) {
-    AudioPlayer.play(randomId);    
-    CurrentlyPlayingMusic = randomId - 57;
-    PlayingAudioWait = millis();
-  }
-}
-
-void DomeLEDsUpdate() {
-  while (millis() >  LEDHoloWait + LEDHoloPause) {
-    for (uint16_t i = 0; i <= 3; i++) {
-      int rand = random(20, 100);
-      DomeLEDS.setPixelColor(i, rand, rand, rand);
-    }
-
-    for (uint16_t j = 22; j <= 25; j++) {
-      int rand = random(20, 100);
-      DomeLEDS.setPixelColor(j, rand, rand, rand);
-    }
-
-    for (uint16_t k = 29; k <= 32; k++) {
-      int rand = random(20, 100);
-      DomeLEDS.setPixelColor(k, rand, rand, rand);
-    }    
-    
-    DomeLEDS.show();
-    LEDHoloWait = millis();
-    LEDHoloPause = random(50, 100);
-    return;  
+void TogglePanelLights(byte onOff) {
+  if (onOff == 0) {
+    // digitalWrite(Relay5VA, LOW);
+    // digitalWrite(Relay5VB, LOW);
   }
   
-  while (millis() >  LEDLogicWait + LEDLogicPause) {
-    // small logic lights have random two colors across all pixels
-    for (uint16_t l = 7; l <= 12; l++) {
-      DomeLEDS.setPixelColor(l, (random(1, 3) == 1) ? LEDBlue : LEDWhite);
-    }
-
-    // large logic lights have two random colors (and off state) per pixel
-    int rand = random(1, 5);
-    DomeLEDS.setPixelColor(13, (rand == 3) ? LEDRed : (rand == 2) ? LEDBlack : (rand == 1) ? LEDRed : LEDRed); //red / red / black / red
-    DomeLEDS.setPixelColor(14, (rand == 1) ? LEDGold : (rand == 2) ? LEDGreen : (rand == 3) ? LEDBlack : LEDGold); //gold / green / black
-    DomeLEDS.setPixelColor(15, (rand == 3) ? LEDGold : (rand == 1) ? LEDGold : (rand == 2) ? LEDBlack : LEDBlack); // gold / gold / black
-    DomeLEDS.setPixelColor(16, (rand == 2) ? LEDGreen : (rand == 3) ? LEDGreen : (rand == 1) ? LEDBlack : LEDGreen); // green / black / black
-    DomeLEDS.setPixelColor(17, (rand == 3) ? LEDGreen : (rand == 1) ? LEDGold : (rand == 2) ? LEDGold : LEDBlack); // green / gold / black
-    DomeLEDS.setPixelColor(18, (rand == 1) ? LEDRed : (rand == 2) ? LEDRed : (rand == 3) ? LEDBlack : LEDBlack); // red / red / black
-    DomeLEDS.setPixelColor(19, (rand == 2) ? LEDGreen : (rand == 3) ? LEDGreen : (rand == 1) ? LEDBlack : LEDGreen); // green / green / black
-    DomeLEDS.setPixelColor(20, (rand == 1) ? LEDGold : (rand == 2) ? LEDGold : (rand == 3) ? LEDGreen : LEDBlack); // gold / gold / green
-    DomeLEDS.setPixelColor(21, (rand == 3) ? LEDRed : (rand == 2) ? LEDBlack : (rand == 1) ? LEDRed : LEDBlack); // red / black / black
-    
-    DomeLEDS.show();
-    LEDLogicWait = millis();
-    LEDLogicPause = random(100, 500);
-    return;  
-  }
-
-  while (millis() >  LEDDiffuseWait + LEDDiffusePause) {
-    BackLEDState = (BackLEDState == 0) ? 1 : 0;
-    FrontLEDState = (FrontLEDState == 0) ? 1 : 0;
-
-    for (uint16_t m = 4; m <= 6; m++) {
-      DomeLEDS.setPixelColor(m, (FrontLEDState == 0)? LEDBlue : LEDRed);
-    }
-
-    for (uint16_t n = 26; n <= 28; n++) {
-      DomeLEDS.setPixelColor(n, (BackLEDState == 0)? LEDGreen: LEDGold);
-    }
-
-    DomeLEDS.show();
-    LEDDiffuseWait = millis();
-    LEDDiffusePause = random(10000, 20000);
-    return;   
+  if (onOff == 1) {
+    // digitalWrite(Relay5VA, HIGH);
+    // digitalWrite(Relay5VB, HIGH);
   }
 }
 
+void ToggleGroundLights(byte onOff) {  
+  //if (onOff == 0) {
+  //  for(int i=0;i<120;i++) {
+  //    BodyLEDS.setPixelColor(i, BodyLEDS.Color(0,0,0));
+  //  }
+  //}
+  
+  //if (onOff == 2) {
+  //  for(int i=0;i<120;i++) {
+  //    BodyLEDS.setPixelColor(i, BodyLEDS.Color(groundLightsRGB[0],groundLightsRGB[1],groundLightsRGB[2])); 
+  //  }
+  //}
 
+  //BodyLEDS.show();
+}
